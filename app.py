@@ -1,26 +1,40 @@
-from fastapi import FastAPI, HTTPException
-import databases
-import sqlalchemy
-from sqlalchemy import create_engine, Column, Integer, String, MetaData, Table
+from fastapi import FastAPI, HTTPException, Depends
+from sqlalchemy import create_engine, Column, Integer, String, MetaData
 from pydantic import BaseModel
+from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy import and_, update, delete
 
-DATABASE_URL = "postgresql://yourusername:yourpassword@localhost/yourdb"
 
-database = databases.Database(DATABASE_URL)
+DATABASE_URL = "postgresql://<username>:<password>@localhost:5432/<db>"
+
 metadata = MetaData()
 
 engine = create_engine(DATABASE_URL)
-metadata.create_all(engine)
+SessionMaker = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+Base = declarative_base()
+
+class EmployeeModel(Base):
+    __tablename__ = "employee"
+
+    id = Column("id", Integer, primary_key=True, index=True, autoincrement=True)
+    name = Column("name", String)
+    role = Column("role", String)
+    
+def get_db():
+    """
+    Function to yield instance of the SessionLocal class will be an Application database session
+    """
+    db = SessionMaker()
+    try:
+        yield db
+    finally:
+        db.close()
+        
+Base.metadata.create_all(engine)
 app = FastAPI()
 
-employee = Table(
-    "employee",
-    metadata,
-    Column("id", Integer, primary_key=True, index=True),
-    Column("name", String, index=True),
-    Column("role", String),
-)
 
 class EmployeeCreate(BaseModel):
     name: str
@@ -35,51 +49,45 @@ class Employee(BaseModel):
     name: str
     role: str
 
-@app.post("/employees/", response_model=Employee)
-async def create_employee(employee: EmployeeCreate):
-    query = employee.insert().values(**employee.dict())
-    last_record_id = await database.execute(query)
-    return {**employee.dict(), "id": last_record_id}
+@app.post("/employees")
+async def create_employee(employee: EmployeeCreate, db: Session = Depends(get_db)):
+    employee_db = EmployeeModel(**employee.dict())
+    db.add(employee_db)
+    db.commit()
+    db.refresh(employee_db)
+    return {"data":employee_db, "message":"Created successfully"}
 
-@app.get("/employees/{employee_id}", response_model=Employee)
-async def get_employee(employee_id: int):
-    query = employee.select().where(employee.c.id == employee_id)
-    result = await database.fetch_one(query)
-    if result is None:
+@app.get("/employees/{employee_id}")
+async def get_employee(employee_id: int, db: Session = Depends(get_db)):
+    employee_db = db.query(EmployeeModel).filter(EmployeeModel.id==employee_id).first()
+    if employee_db is None:
         raise HTTPException(status_code=404, detail="Employee not found")
+    return employee_db
+
+@app.get("/employees")
+async def get_employees(db: Session = Depends(get_db)):
+    result = db.query(EmployeeModel).all()
     return result
 
-@app.get("/employees/", response_model=list[Employee])
-async def get_employees():
-    query = employee.select()
-    results = await database.fetch_all(query)
-    return results
-
-@app.put("/employees/{employee_id}", response_model=Employee)
-async def update_employee(employee_id: int, updated_employee: EmployeeUpdate):
-    query = employee.select().where(employee.c.id == employee_id)
-    existing_employee = await database.fetch_one(query)
-    if existing_employee is None:
+@app.put("/employees/{employee_id}")
+async def update_employee(employee_id: int, updated_employee: EmployeeUpdate, db: Session = Depends(get_db)):
+    employee_db = db.query(EmployeeModel).filter(EmployeeModel.id==employee_id).first()
+    if employee_db is None:
         raise HTTPException(status_code=404, detail="Employee not found")
 
-    updated_data = updated_employee.dict(exclude_unset=True)
-    query = (
-        employee
-        .update()
-        .where(employee.c.id == employee_id)
-        .values(**updated_data)
-        .returning(employee)
-    )
-    updated_record = await database.execute(query)
-    return updated_record
+    employee_db.name = updated_employee.name 
+    employee_db.role = updated_employee.role 
 
-@app.delete("/employees/{employee_id}", response_model=Employee)
-async def delete_employee(employee_id: int):
-    query = employee.select().where(employee.c.id == employee_id)
-    existing_employee = await database.fetch_one(query)
-    if existing_employee is None:
+    db.commit()
+    db.refresh(employee_db)
+    return {"data":employee_db, "message":"Updated successfully"}
+
+@app.delete("/employees/{employee_id}")
+async def delete_employee(employee_id: int, db: Session = Depends(get_db)):
+    employee_db = db.get(EmployeeModel, employee_id)
+    if employee_db is None:
         raise HTTPException(status_code=404, detail="Employee not found")
 
-    query = employee.delete().where(employee.c.id == employee_id)
-    deleted_employee = await database.execute(query)
-    return existing_employee
+    db.execute(delete(EmployeeModel).where(EmployeeModel.id == employee_id))
+    db.commit()
+    return {"data":employee_db, "message":"Deleted successfully"}
