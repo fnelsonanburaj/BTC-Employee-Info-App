@@ -49,6 +49,10 @@ class Employee(BaseModel):
     name: str
     role: str
 
+@app.post("/health")
+async def health():
+    return {"message":"Hello from  BTC employee app"}
+    
 @app.post("/employees")
 async def create_employee(employee: EmployeeCreate, db: Session = Depends(get_db)):
     employee_db = EmployeeModel(**employee.dict())
