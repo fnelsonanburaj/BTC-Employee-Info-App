@@ -49,7 +49,7 @@ class Employee(BaseModel):
     name: str
     role: str
 
-@app.post("/health")
+@app.get("/health")
 async def health():
     return {"message":"Hello from  BTC employee app"}
     
